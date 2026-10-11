@@ -1,36 +1,59 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ログイン完了</title>
-<style>body{font-family:sans-serif;background:#000;color:#fff;text-align:center;padding:28px}
-textarea{width:92%;height:110px;background:#111;color:#0f0;border:1px solid #444;border-radius:8px;padding:8px;word-break:break-all}
+<style>body{font-family:sans-serif;background:#111;color:#fff;text-align:center;padding:28px;line-height:1.7}
+#m{font-size:1.1rem;color:#fff}
+textarea{width:92%;height:110px;background:#000;color:#0f0;border:1px solid #444;border-radius:8px;padding:8px;word-break:break-all}
 button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-weight:bold;margin:8px}</style></head>
 <body>
 <p id="m">ログイン処理中...</p>
 <div id="fb" style="display:none">
-  <p style="font-size:.85rem;opacity:.8">元の画面に自動で戻れなかった場合は、下のコードをコピーして、元の画面の「認証コードを貼り付け」に入力してください。</p>
+  <p style="font-size:.85rem;opacity:.8">自動で完了できなかった場合は、下のコードをコピーして、元の画面の「認証コードを貼り付け」に入力してください。</p>
   <textarea id="tk" readonly></textarea><br>
   <button onclick="var t=document.getElementById('tk');t.select();document.execCommand('copy');this.textContent='コピーしました'">コードをコピー</button>
 </div>
 <script>
 (function () {
-  var h = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
-  var err = h.get('error_description') || q.get('error_description') || '';
-  var tok = h.get('access_token') || '';
   var m = document.getElementById('m');
-  history.replaceState(null, '', location.pathname);   // URLからトークンを消す
-  if (err || !tok) { m.textContent = '失敗しました: ' + (err || 'トークンがありません'); }
-  var sent = false;
-  try {
-    if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: 'ws-auth', access_token: tok, error: err }, '*');
-      sent = true;
-    }
-  } catch (e) {}
-  if (tok && sent) { m.textContent = 'ログインしました。このウィンドウは自動で閉じます。'; setTimeout(function () { window.close(); }, 1200); }
-  else if (tok) {
-    m.textContent = '元の画面と接続できませんでした。';
-    document.getElementById('tk').value = tok; document.getElementById('fb').style.display = 'block';
+  var hp = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
+
+  /* ---- ① 開始モード: 元の画面のリンクから来た。state を覚えてから Supabase のログインへ ---- */
+  if (hp.get('start')) {
+    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '';
+    var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
+    var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
+    var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
+    if (!okState || !okSb) { m.textContent = '開始情報が正しくありません。元の画面からやり直してください。'; return; }
+    try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', t: Date.now() })); } catch (e) {}
+    m.textContent = 'Googleのログイン画面へ移動します...';
+    location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&redirect_to=' + encodeURIComponent(location.origin + location.pathname));
+    return;
   }
+
+  /* ---- ② 完了モード: Supabase から戻ってきた(#access_token=...) ---- */
+  var err = hp.get('error_description') || q.get('error_description') || '';
+  var tok = hp.get('access_token') || '';
+  history.replaceState(null, '', location.pathname);   // URLからトークンを消す
+  if (err || !tok) { m.textContent = '失敗しました: ' + (err || 'トークンがありません(元の画面のリンクからログインしてください)'); return; }
+
+  var pend = null;
+  try { pend = JSON.parse(localStorage.getItem('ws_auth_pending') || 'null'); localStorage.removeItem('ws_auth_pending'); } catch (e) {}
+  var fresh = pend && pend.state && (Date.now() - pend.t) < 15 * 60 * 1000;
+  var sent = false;
+
+  // 方法A: 元のウィンドウが生きていれば直接渡す(ポップアップ方式の場合)
+  try { if (window.opener && !window.opener.closed) { window.opener.postMessage({ type: 'ws-auth', access_token: tok, error: '' }, '*'); sent = true; } } catch (e) {}
+
+  // 方法B: GAS のウェブアプリへ渡す(元の画面が受け取る)
+  function finishUI(ok) {
+    if (ok) { m.textContent = 'ログインできました。このタブを閉じて、元の画面に戻ってください(数秒で自動ログインされます)。'; setTimeout(function () { try { window.close(); } catch (e) {} }, 2500); }
+    else { m.textContent = '元の画面へ自動で渡せませんでした。下のコードを、元の画面の「認証コードを貼り付け」に入れてください。'; document.getElementById('tk').value = tok; document.getElementById('fb').style.display = 'block'; }
+  }
+  if (fresh && pend.gas) {
+    fetch(pend.gas, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ state: pend.state, token: tok }) })
+      .then(function () { finishUI(true); })
+      .catch(function () { finishUI(sent); });
+  } else { finishUI(sent); }
 })();
 </script>
 </body></html>
