@@ -2,29 +2,35 @@
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ログイン完了</title>
 <style>body{font-family:sans-serif;background:#111;color:#fff;text-align:center;padding:28px;line-height:1.7}
-#m{font-size:1.1rem;color:#fff}
-textarea{width:92%;height:110px;background:#000;color:#0f0;border:1px solid #444;border-radius:8px;padding:8px;word-break:break-all}
+#m{font-size:1.05rem}
+#code{font-size:2.6rem;font-weight:bold;letter-spacing:.35em;margin:14px 0;color:#29b6f6;font-family:monospace}
+textarea{width:92%;height:90px;background:#000;color:#0f0;border:1px solid #444;border-radius:8px;padding:8px;word-break:break-all}
 button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-weight:bold;margin:8px}</style></head>
 <body>
 <p id="m">ログイン処理中...</p>
+<div id="cd" style="display:none">
+  <div id="code"></div>
+  <button onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('code').textContent);this.textContent='コピーしました'">コードをコピー</button>
+  <p style="font-size:.85rem;opacity:.8">この8文字を、元の画面の「別タブに表示されたコード」欄に入力して「コードで完了」を押してください。<br>10分で無効になります。他の人に見せないでください。</p>
+</div>
 <div id="fb" style="display:none">
-  <p style="font-size:.85rem;opacity:.8">自動で完了できなかった場合は、下のコードをコピーして、元の画面の「認証コードを貼り付け」に入力してください。</p>
-  <textarea id="tk" readonly></textarea><br>
-  <button onclick="var t=document.getElementById('tk');t.select();document.execCommand('copy');this.textContent='コピーしました'">コードをコピー</button>
+  <p style="font-size:.8rem;opacity:.7">(予備)コードが使えない場合は、下の認証コードを貼り付けてください。</p>
+  <textarea id="tk" readonly></textarea>
 </div>
 <script>
 (function () {
   var m = document.getElementById('m');
   var hp = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
 
-  /* ---- ① 開始モード: 元の画面のリンクから来た。state を覚えてから Supabase のログインへ ---- */
+  /* ---- ① 開始モード: 元の画面のリンクから来た → 情報を覚えて Supabase のログインへ ---- */
   if (hp.get('start')) {
-    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '';
+    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = hp.get('ak') || '';
     var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
     var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
     var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
+    var okAk = /^(sb_publishable_[\w-]+|eyJ[\w.-]+)$/.test(ak);
     if (!okState || !okSb) { m.textContent = '開始情報が正しくありません。元の画面からやり直してください。'; return; }
-    try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', t: Date.now() })); } catch (e) {}
+    try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: okAk ? ak : '', t: Date.now() })); } catch (e) {}
     m.textContent = 'Googleのログイン画面へ移動します...';
     location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&redirect_to=' + encodeURIComponent(location.origin + location.pathname));
     return;
@@ -39,21 +45,41 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
   var pend = null;
   try { pend = JSON.parse(localStorage.getItem('ws_auth_pending') || 'null'); localStorage.removeItem('ws_auth_pending'); } catch (e) {}
   var fresh = pend && pend.state && (Date.now() - pend.t) < 15 * 60 * 1000;
-  var sent = false;
 
-  // 方法A: 元のウィンドウが生きていれば直接渡す(ポップアップ方式の場合)
-  try { if (window.opener && !window.opener.closed) { window.opener.postMessage({ type: 'ws-auth', access_token: tok, error: '' }, '*'); sent = true; } } catch (e) {}
-
-  // 方法B: GAS のウェブアプリへ渡す(元の画面が受け取る)
-  function finishUI(ok) {
-    if (ok) { m.textContent = 'ログインできました。このタブを閉じて、元の画面に戻ってください(数秒で自動ログインされます)。'; setTimeout(function () { try { window.close(); } catch (e) {} }, 2500); }
-    else { m.textContent = '元の画面へ自動で渡せませんでした。下のコードを、元の画面の「認証コードを貼り付け」に入れてください。'; document.getElementById('tk').value = tok; document.getElementById('fb').style.display = 'block'; }
-  }
+  // 方法A(予備): 元のウィンドウが生きていれば直接渡す
+  try { if (window.opener && !window.opener.closed) window.opener.postMessage({ type: 'ws-auth', access_token: tok, error: '' }, '*'); } catch (e) {}
+  // 方法B(予備): GAS のウェブアプリへ渡す(元の画面が自動で受け取る)
   if (fresh && pend.gas) {
-    fetch(pend.gas, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ state: pend.state, token: tok }) })
-      .then(function () { finishUI(true); })
-      .catch(function () { finishUI(sent); });
-  } else { finishUI(sent); }
+    try { fetch(pend.gas, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ state: pend.state, token: tok }) }); } catch (e) {}
+  }
+
+  // 方法C(メイン): 8文字コードを Supabase に登録して表示。元の画面で入力すると照合される
+  function makeCode() {
+    var A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', a = new Uint8Array(8), s = '';
+    crypto.getRandomValues(a);
+    for (var i = 0; i < 8; i++) s += A[a[i] % A.length];
+    return s;
+  }
+  function showFallback() { document.getElementById('tk').value = tok; document.getElementById('fb').style.display = 'block'; }
+  if (fresh && pend.sb && pend.ak) {
+    var code = makeCode();
+    fetch(pend.sb + '/rest/v1/rpc/put_login_code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: pend.ak, Authorization: 'Bearer ' + tok },
+      body: JSON.stringify({ p_code: code })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      m.textContent = 'ログインできました。次のコードを、元の画面に入力してください。';
+      document.getElementById('code').textContent = code;
+      document.getElementById('cd').style.display = 'block';
+    }).catch(function (e) {
+      m.textContent = 'コードを登録できませんでした(' + e.message + ')。予備の認証コードを使ってください。';
+      showFallback();
+    });
+  } else {
+    m.textContent = '開始情報が見つかりません。元の画面のリンクからやり直すか、予備の認証コードを使ってください。';
+    showFallback();
+  }
 })();
 </script>
 </body></html>
