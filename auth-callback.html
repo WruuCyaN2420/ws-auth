@@ -24,51 +24,68 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
   var m = document.getElementById('m');
   var hp = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
 
-  /* ---- ① 開始モード: 元の画面のリンクから来た → 情報を覚えて Supabase のログインへ ---- */
+  function b64url(buf) {
+    var s = ''; new Uint8Array(buf).forEach(function (b) { s += String.fromCharCode(b); });
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function randStr(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); return b64url(a.buffer); }
+
+  /* ---- ① 開始モード: 元の画面のリンクから来た → PKCEの準備をして Supabase のログインへ ---- */
   if (hp.get('start')) {
-    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = PUBLIC_KEY, yt = hp.get('yt') === '1';   // キーはURLに載せない(会社のフィルター対策)
+    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = PUBLIC_KEY, yt = hp.get('yt') === '1';
     var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
     var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
     var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
-    var okAk = /^(sb_publishable_[\w-]+|eyJ[\w.-]+)$/.test(ak);
     if (!okState || !okSb) { m.textContent = '開始情報が正しくありません。元の画面からやり直してください。'; return; }
-    try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: okAk ? ak : '', yt: yt, t: Date.now() })); } catch (e) {}
-    m.textContent = 'Googleのログイン画面へ移動します...';
-    location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
-      (yt ? '&scopes=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.force-ssl') : ''));
+    var verifier = randStr(48);
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function (d) {
+      var challenge = b64url(d);
+      try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: ak, yt: yt, v: verifier, t: Date.now() })); } catch (e) {}
+      m.textContent = 'Googleのログイン画面へ移動します...';
+      // PKCE: ログイン後のURLには「code」しか載らない(トークンはURLに出ない)
+      location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=s256&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
+        (yt ? '&scopes=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.force-ssl') : ''));
+    });
     return;
   }
 
-  /* ---- ② 完了モード: Supabase から戻ってきた(#access_token=...) ---- */
+  /* ---- ② 完了モード: Supabase から戻ってきた(?code=...) ---- */
   var err = hp.get('error_description') || q.get('error_description') || '';
-  var tok = hp.get('access_token') || '', ptok = hp.get('provider_token') || '';   // ptok: Googleの一時トークン(YouTube操作用)
-  history.replaceState(null, '', location.pathname);   // URLからトークンを消す
-  if (err || !tok) { m.textContent = '失敗しました: ' + (err || 'トークンがありません(元の画面のリンクからログインしてください)'); return; }
-
+  var code0 = q.get('code') || '';
+  var legacyTok = hp.get('access_token') || '', legacyP = hp.get('provider_token') || '';   // 旧方式(URLにトークン)も受け付ける
+  history.replaceState(null, '', location.pathname);   // URLから code / トークンを消す
   var pend = null;
   try { pend = JSON.parse(localStorage.getItem('ws_auth_pending') || 'null'); localStorage.removeItem('ws_auth_pending'); } catch (e) {}
   var fresh = pend && pend.state && (Date.now() - pend.t) < 15 * 60 * 1000;
 
-  // 方法A(予備): 元のウィンドウが生きていれば直接渡す
-  try { if (window.opener && !window.opener.closed) window.opener.postMessage({ type: 'ws-auth', access_token: tok, error: '' }, '*'); } catch (e) {}
-  // 方法B(予備): GAS のウェブアプリへ渡す(元の画面が自動で受け取る)
-  if (fresh && pend.gas) {
-    try { fetch(pend.gas, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ state: pend.state, token: tok }) }); } catch (e) {}
+  if (err) { m.textContent = '失敗しました: ' + err; return; }
+  if (code0 && fresh && pend.v) {
+    m.textContent = 'ログインを確認中...';
+    fetch(pend.sb + '/auth/v1/token?grant_type=pkce', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: pend.ak },
+      body: JSON.stringify({ auth_code: code0, code_verifier: pend.v })
+    }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.msg || j.error_description || j.message || ('HTTP ' + r.status)); return j; }); })
+      .then(function (j) { finish(j.access_token || '', j.provider_token || ''); })
+      .catch(function (e) { m.textContent = '失敗しました: ' + e.message + '(元の画面からやり直してください)'; });
+    return;
   }
+  if (legacyTok) { finish(legacyTok, legacyP); return; }
+  m.textContent = '失敗しました: 情報がありません(元の画面のリンクからログインしてください)';
 
-  // 方法C(メイン): 8文字コードを Supabase に登録して表示。元の画面で入力すると照合される
-  function makeCode() {
-    var A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', a = new Uint8Array(8), s = '';
-    crypto.getRandomValues(a);
-    for (var i = 0; i < 8; i++) s += A[a[i] % A.length];
-    return s;
-  }
-  function showFallback() { document.getElementById('tk').value = tok; document.getElementById('fb').style.display = 'block'; }
-  if (fresh && pend.sb && pend.ak) {
-    var code = makeCode();
+  function finish(tok, ptok) {
+    if (!tok) { m.textContent = '失敗しました: トークンを取得できませんでした'; return; }
+    // 予備A: 元のウィンドウへ直接渡す
+    try { if (window.opener && !window.opener.closed) window.opener.postMessage({ type: 'ws-auth', access_token: tok, error: '' }, '*'); } catch (e) {}
+    // 予備B: GAS のウェブアプリへ渡す
+    if (fresh && pend.gas) {
+      try { fetch(pend.gas, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ state: pend.state, token: tok }) }); } catch (e) {}
+    }
+    // メイン: 8文字コードを Supabase に登録して表示(YouTube許可のときは一時トークンも一緒に預ける)
+    var A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', a = new Uint8Array(8), code = '';
+    crypto.getRandomValues(a); for (var i = 0; i < 8; i++) code += A[a[i] % A.length];
+    if (!(fresh && pend.sb && pend.ak)) { m.textContent = '開始情報が見つかりません。元の画面のリンクからやり直してください。'; return; }
     fetch(pend.sb + '/rest/v1/rpc/put_login_code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: pend.ak, Authorization: 'Bearer ' + tok },
+      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: pend.ak, Authorization: 'Bearer ' + tok },
       body: JSON.stringify(pend.yt && ptok ? { p_code: code, p_yt: ptok } : { p_code: code })
     }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -76,12 +93,9 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
       document.getElementById('code').textContent = code;
       document.getElementById('cd').style.display = 'block';
     }).catch(function (e) {
-      m.textContent = 'コードを登録できませんでした(' + e.message + ')。予備の認証コードを使ってください。';
-      showFallback();
+      m.textContent = 'コードを登録できませんでした(' + e.message + ')。';
+      document.getElementById('tk').value = tok; document.getElementById('fb').style.display = 'block';
     });
-  } else {
-    m.textContent = '開始情報が見つかりません。元の画面のリンクからやり直すか、予備の認証コードを使ってください。';
-    showFallback();
   }
 })();
 </script>
