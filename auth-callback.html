@@ -19,12 +19,14 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
 </div>
 <script>
 (function () {
+  /* Supabase の publishable キー(公開前提のキー)。URLに入れるとフィルターに止められるため、ここに持たせています */
+  var PUBLIC_KEY = 'sb_publishable_kGUs7S7Hh0XLMBk_w8rMJg_LceYsj9X';
   var m = document.getElementById('m');
   var hp = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
 
   /* ---- ① 開始モード: 元の画面のリンクから来た → 情報を覚えて Supabase のログインへ ---- */
   if (hp.get('start')) {
-    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = hp.get('ak') || '';
+    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = PUBLIC_KEY;   // キーはURLに載せない(会社のフィルター対策)
     var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
     var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
     var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
