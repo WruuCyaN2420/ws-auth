@@ -26,21 +26,22 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
 
   /* ---- ① 開始モード: 元の画面のリンクから来た → 情報を覚えて Supabase のログインへ ---- */
   if (hp.get('start')) {
-    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = PUBLIC_KEY;   // キーはURLに載せない(会社のフィルター対策)
+    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = PUBLIC_KEY, yt = hp.get('yt') === '1';   // キーはURLに載せない(会社のフィルター対策)
     var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
     var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
     var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
     var okAk = /^(sb_publishable_[\w-]+|eyJ[\w.-]+)$/.test(ak);
     if (!okState || !okSb) { m.textContent = '開始情報が正しくありません。元の画面からやり直してください。'; return; }
-    try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: okAk ? ak : '', t: Date.now() })); } catch (e) {}
+    try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: okAk ? ak : '', yt: yt, t: Date.now() })); } catch (e) {}
     m.textContent = 'Googleのログイン画面へ移動します...';
-    location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&redirect_to=' + encodeURIComponent(location.origin + location.pathname));
+    location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
+      (yt ? '&scopes=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.force-ssl') : ''));
     return;
   }
 
   /* ---- ② 完了モード: Supabase から戻ってきた(#access_token=...) ---- */
   var err = hp.get('error_description') || q.get('error_description') || '';
-  var tok = hp.get('access_token') || '';
+  var tok = hp.get('access_token') || '', ptok = hp.get('provider_token') || '';   // ptok: Googleの一時トークン(YouTube操作用)
   history.replaceState(null, '', location.pathname);   // URLからトークンを消す
   if (err || !tok) { m.textContent = '失敗しました: ' + (err || 'トークンがありません(元の画面のリンクからログインしてください)'); return; }
 
@@ -68,10 +69,10 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
     fetch(pend.sb + '/rest/v1/rpc/put_login_code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: pend.ak, Authorization: 'Bearer ' + tok },
-      body: JSON.stringify({ p_code: code })
+      body: JSON.stringify(pend.yt && ptok ? { p_code: code, p_yt: ptok } : { p_code: code })
     }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      m.textContent = 'ログインできました。次のコードを、元の画面に入力してください。';
+      m.textContent = (pend.yt && !ptok) ? 'ログインできましたが、YouTubeの許可が付いていません(許可画面で拒否した可能性)。次のコードで、ログインだけ完了できます。' : 'ログインできました。次のコードを、元の画面に入力してください。';
       document.getElementById('code').textContent = code;
       document.getElementById('cd').style.display = 'block';
     }).catch(function (e) {
