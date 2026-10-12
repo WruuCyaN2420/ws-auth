@@ -8,6 +8,11 @@ textarea{width:92%;height:90px;background:#000;color:#0f0;border:1px solid #444;
 button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-weight:bold;margin:8px}</style></head>
 <body>
 <p id="m">ログイン処理中...</p>
+<div id="go" style="display:none">
+  <button id="go1">① ログインのみ(YouTube許可なし)</button><br>
+  <button id="go2">② YouTubeの許可つきで進む(高評価・コメント・登録チャンネル用)</button>
+  <p style="font-size:.8rem;opacity:.7">先に①で試すと、フィルターに止められる箇所を切り分けられます。</p>
+</div>
 <div id="cd" style="display:none">
   <div id="code"></div>
   <button onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('code').textContent);this.textContent='コピーしました'">コードをコピー</button>
@@ -30,9 +35,13 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
   }
   function randStr(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); return b64url(a.buffer); }
 
-  /* ---- ① 開始モード: 元の画面のリンクから来た → PKCEの準備をして Supabase のログインへ ---- */
-  if (hp.get('start')) {
-    var state = hp.get('start') || '', gas = hp.get('gas') || '', sb = hp.get('sb') || '', ak = PUBLIC_KEY, yt = hp.get('yt') === '1';
+  /* ---- ① 開始モード: 元の画面のリンクから来た → 準備して「進むボタン」を出す(自動では移動しない) ---- */
+  var SP = null;   // 新形式: #s=<base64url(JSON)>  /  旧形式: #start=...&gas=...&sb=...
+  if (hp.get('s')) {
+    try { var jb = hp.get('s').replace(/-/g, '+').replace(/_/g, '/'); SP = JSON.parse(decodeURIComponent(escape(atob(jb)))); } catch (e) { SP = null; }
+  }
+  if (SP || hp.get('start')) {
+    var state = SP ? String(SP.i || '') : (hp.get('start') || ''), gas = SP ? String(SP.g || '') : (hp.get('gas') || ''), sb = SP ? String(SP.u || '') : (hp.get('sb') || ''), ak = PUBLIC_KEY, ytWant = SP ? SP.y === 1 : hp.get('yt') === '1';
     var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
     var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
     var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
@@ -40,11 +49,18 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
     var verifier = randStr(48);
     crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function (d) {
       var challenge = b64url(d);
-      try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: ak, yt: yt, v: verifier, t: Date.now() })); } catch (e) {}
-      m.textContent = 'Googleのログイン画面へ移動します...';
-      // PKCE: ログイン後のURLには「code」しか載らない(トークンはURLに出ない)
-      location.replace(sb + '/auth/v1/authorize?provider=google&prompt=select_account&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=s256&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
-        (yt ? '&scopes=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.force-ssl') : ''));
+      function go(withYt) {
+        try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: ak, yt: withYt, v: verifier, t: Date.now() })); } catch (e) {}
+        m.textContent = 'Googleのログイン画面へ移動します...(ここで止まる場合は、移動先が会社のフィルターに止められています)';
+        // PKCE: ログイン後のURLには「code」しか載らない(トークンはURLに出ない)
+        location.href = sb + '/auth/v1/authorize?provider=google&prompt=select_account&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=s256&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
+          (withYt ? '&scopes=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.force-ssl') : '');
+      }
+      m.textContent = '準備ができました。進むボタンを押してください。';
+      var box = document.getElementById('go'); box.style.display = 'block';
+      document.getElementById('go1').onclick = function () { go(false); };
+      document.getElementById('go2').onclick = function () { go(true); };
+      document.getElementById('go' + (ytWant ? '2' : '1')).style.outline = '3px solid #fff';
     });
     return;
   }
