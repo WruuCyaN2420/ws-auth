@@ -11,7 +11,8 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
 <div id="go" style="display:none">
   <button id="go1">① ログインのみ(YouTube許可なし)</button><br>
   <button id="go2">② YouTubeの許可つきで進む(高評価・コメント・登録チャンネル用)</button><br>
-  <button id="go3">③ YouTube+Gmailの許可つきで進む(メールの受信・送信用)</button>
+  <button id="go3">③ YouTube+Gmailの許可つきで進む(メールの受信・送信用)</button><br>
+  <button id="go4" style="background:#9146ff;color:#fff">④ Twitchでログイン</button>
   <p style="font-size:.8rem;opacity:.7">先に①で試すと、フィルターに止められる箇所を切り分けられます。</p>
 </div>
 <div id="cd" style="display:none">
@@ -42,7 +43,7 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
     try { var jb = hp.get('s').replace(/-/g, '+').replace(/_/g, '/'); SP = JSON.parse(decodeURIComponent(escape(atob(jb)))); } catch (e) { SP = null; }
   }
   if (SP || hp.get('start')) {
-    var state = SP ? String(SP.i || '') : (hp.get('start') || ''), gas = SP ? String(SP.g || '') : (hp.get('gas') || ''), sb = SP ? String(SP.u || '') : (hp.get('sb') || ''), ak = PUBLIC_KEY, ytWant = SP ? SP.y === 1 : hp.get('yt') === '1', mailWant = SP ? SP.m === 1 : false;
+    var state = SP ? String(SP.i || '') : (hp.get('start') || ''), gas = SP ? String(SP.g || '') : (hp.get('gas') || ''), sb = SP ? String(SP.u || '') : (hp.get('sb') || ''), ak = PUBLIC_KEY, ytWant = SP ? SP.y === 1 : hp.get('yt') === '1', mailWant = SP ? SP.m === 1 : false, provWant = SP ? String(SP.p || '') : '';
     var okState = /^[A-Za-z0-9_-]{16,64}$/.test(state);
     var okGas = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|a\/[\w.-]+\/macros|macros(\/u\/\d+)?)\/s\/[\w-]+\/exec$/.test(gas);
     var okSb = /^https:\/\/[a-z0-9]+\.supabase\.co$/.test(sb);
@@ -50,11 +51,19 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
     var verifier = randStr(48);
     crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function (d) {
       var challenge = b64url(d);
-      function go(withYt, withMail) {
+      function go(withYt, withMail, prov) {
+        if (prov === 'twitch') {   // Twitch(公開クライアント): Implicit Grant でトークンを直接受け取る
+          var cid = (SP && /^[a-z0-9]{20,40}$/.test(String(SP.c || ''))) ? String(SP.c) : '7u4etnm63yightwzstz2a8gtjwdh2b';
+          try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', tw: 1, cid: cid, t: Date.now() })); } catch (e) {}
+          m.textContent = 'Twitchのログイン画面へ移動します...(ここで止まる場合は、移動先がフィルターに止められています)';
+          location.href = 'https://id.twitch.tv/oauth2/authorize?client_id=' + encodeURIComponent(cid) + '&redirect_uri=' + encodeURIComponent(location.origin + location.pathname) +
+            '&response_type=token&scope=' + encodeURIComponent('user:read:email') + '&state=' + encodeURIComponent(state) + '&force_verify=true';
+          return;
+        }
         try { localStorage.setItem('ws_auth_pending', JSON.stringify({ state: state, gas: okGas ? gas : '', sb: sb, ak: ak, yt: withYt, v: verifier, t: Date.now() })); } catch (e) {}
-        m.textContent = 'Googleのログイン画面へ移動します...(ここで止まる場合は、移動先が会社のフィルターに止められています)';
+        m.textContent = (prov === 'twitch' ? 'Twitch' : 'Google') + 'のログイン画面へ移動します...(ここで止まる場合は、移動先が会社のフィルターに止められています)';
         // PKCE: ログイン後のURLには「code」しか載らない(トークンはURLに出ない)
-        location.href = sb + '/auth/v1/authorize?provider=google&prompt=select_account&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=s256&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
+        location.href = sb + '/auth/v1/authorize?provider=' + (prov === 'twitch' ? 'twitch' : 'google') + (prov === 'twitch' ? '' : '&prompt=select_account') + '&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=s256&redirect_to=' + encodeURIComponent(location.origin + location.pathname) +
           (withYt ? '&scopes=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.force-ssl' + (withMail ? ' https://www.googleapis.com/auth/gmail.modify' : '')) : '');
       }
       m.textContent = '準備ができました。進むボタンを押してください。';
@@ -62,7 +71,8 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
       document.getElementById('go1').onclick = function () { go(false, false); };
       document.getElementById('go2').onclick = function () { go(true, false); };
       document.getElementById('go3').onclick = function () { go(true, true); };
-      document.getElementById('go' + (mailWant ? '3' : ytWant ? '2' : '1')).style.outline = '3px solid #fff';
+      document.getElementById('go4').onclick = function () { go(false, false, 'twitch'); };
+      document.getElementById('go' + (provWant === 'twitch' ? '4' : mailWant ? '3' : ytWant ? '2' : '1')).style.outline = '3px solid #fff';
     });
     return;
   }
@@ -75,6 +85,9 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
   var pend = null;
   try { pend = JSON.parse(localStorage.getItem('ws_auth_pending') || 'null'); localStorage.removeItem('ws_auth_pending'); } catch (e) {}
   var fresh = pend && pend.state && (Date.now() - pend.t) < 15 * 60 * 1000;
+
+  /* Twitchから戻ってきた(#access_token=…&state=…): 保存してある state と一致したときだけ受け付ける */
+  if (pend && pend.tw && fresh && legacyTok && (hp.get('state') || '') === pend.state) { twFinish(legacyTok, pend); return; }
 
   if (err) { m.textContent = '失敗しました: ' + err; return; }
   if (code0 && fresh && pend.v) {
@@ -89,6 +102,20 @@ button{background:#29b6f6;border:0;border-radius:99px;padding:10px 20px;font-wei
   }
   if (legacyTok) { finish(legacyTok, legacyP); return; }
   m.textContent = '失敗しました: 情報がありません(元の画面のリンクからログインしてください)';
+
+  function twFinish(tok, pd) {
+    if (!/^[A-Za-z0-9]{20,64}$/.test(tok)) { m.textContent = '失敗しました: Twitchのトークンの形式が正しくありません'; return; }
+    m.textContent = 'Twitchのログインを確認中...';
+    fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + tok } })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.message || ('HTTP ' + r.status)); return j; }); })
+      .then(function (v) {
+        if (pd.cid && v.client_id !== pd.cid) throw new Error('別のアプリ用のトークンです');
+        m.textContent = 'Twitchでログインできました(' + v.login + ')。元の画面に戻ってください。自動でログインされます。';
+        if (pd.gas) { try { fetch(pd.gas, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ state: pd.state, provider: 'twitch', token: tok }) }); } catch (e) {} }
+        document.getElementById('tk').value = 'twitch:' + tok; document.getElementById('fb').style.display = 'block';
+      })
+      .catch(function (e) { m.textContent = '失敗しました: ' + e.message + '(元の画面からやり直してください)'; });
+  }
 
   function finish(tok, ptok) {
     if (!tok) { m.textContent = '失敗しました: トークンを取得できませんでした'; return; }
